@@ -3,89 +3,118 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Image Processing</title>
+    <title>Image Processing Studio</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <!-- Dropdown Menüler -->
-    <div class="dropdown">
-        <button onclick="toggleMenu('thresholdingMenu')" class="dropbtn">Thresholding</button>
-        <div id="thresholdingMenu" class="dropdown-content">
-            <a href="#" onclick="runAdaptiveThresholding()">Adaptive Thresholding</a>
-            <a href="#" onclick="runOtsuThresholding()">Otsu Thresholding</a>
-        </div>
-    </div>    
-
-    <div class="dropdown">
-        <button onclick="runBlur()" class="dropbtn">Bulanıklaştırma</button>
-        <div id="blurMenu" class="dropdown-content">
-        </div>
-    </div>
-            
-    <div class="dropdown">
-        <button onclick="runSharpness()" class="dropbtn">Keskinleştirme</button>
-        <div id="sharpnessMenu" class="dropdown-content">
-        </div>
-    </div>
-            
-    <div class="dropdown">
-        <button  onclick="runGamma()" class="dropbtn">Gamma Filtreleme</button>
-        <div id="gammaMenu" class="dropdown-content">
-        </div>
-    </div>
-    
-            
-    <div class="dropdown">
-        <button onclick="toggleMenu('edgeDetectionMenu')" class="dropbtn">Kenar Tespit Et</button>
-        <div id="edgeDetectionMenu" class="dropdown-content">
-            <a onclick="runCanny()" href="#">Canny Filter</a>
-            <a onclick="runSobel()" href="#">Sobel Filter</a>
-            <a onclick="runLaplacian()" href="#">Laplacian Filter</a>
-        </div>
-    </div>
-            
-    <div class="dropdown">
-        <button onclick="toggleMenu('cornerDetectionMenu')" class="dropbtn">Köşe Tespit Et</button>
-        <div id="cornerDetectionMenu" class="dropdown-content">
-            <a onclick="runHarris()" href="#">Harris Algoritması</a>
-            <a onclick="runShiTomasi()" href="#">Shi-Tomasi Algoritması</a>
-        </div>
-    </div>
-     
-    <div class="dropdown">
-        <button onclick="toggleFaceDetection()" class="dropbtn">Yüz Tanımlama</button>
-        
-        <div id="gammaMenu" class="dropdown-content">
-        </div>
-    </div>    
-
-    <!-- Yükleme Alanı -->
-   <div class="upload-area">
-        <div class="upload-box">
-            <img id="cameraFeed" style="display: none;" alt="Yüz Tanıma Kamerası">
-
-            <button class="upload-button" onclick="uploadImage()"> Resim Yükle ▼</button>
-            <input type="file" id="imageInput" accept="image/*" style="display: none;" onchange="handleImageUpload(event)" />
-        </div>
-    
-        <div class="button-container">
-            <div class="compare-button"
-                onmousedown="showOriginal()"
-                onmouseup="showEdited()"
-                onmouseleave="showEdited()">
-                Compare
+    <div class="app-shell">
+        <header class="app-header">
+            <div class="brand">
+                <h1>Image Processing Studio</h1>
             </div>
-            <div class="reset-button"
-                onclick="resetImage()">
-                Reset
+            <div class="header-actions" aria-label="Temel aksiyonlar">
+                <button type="button" id="undoButton" class="button icon-button" onclick="undoImage()" aria-label="Geri al" title="Geri al" disabled>&#8630;</button>
+                <button type="button" id="redoButton" class="button icon-button" onclick="redoImage()" aria-label="İleri al" title="İleri al" disabled>&#8631;</button>
+                <button type="button" class="button button-subtle" onclick="resetImage()">Sıfırla</button>
+                <button type="button" class="button button-primary" onclick="downloadImage()">İndir</button>
             </div>
-            <div class="download-button"
-                onclick="downloadImage()">
-                Download
-            </div>
-        </div>
+        </header>
 
+        <aside class="tool-panel" aria-label="İşlem paneli">
+            <section class="panel upload-panel">
+                <button type="button" id="uploadDropzone" class="dropzone" onclick="uploadImage()">
+                    <span class="dropzone-title">Resim yükle</span>
+                    <span class="dropzone-copy">Sürükle-bırak veya dosya seç</span>
+                    <span class="dropzone-hint">PNG, JPG, WEBP - en fazla 8 MB</span>
+                </button>
+                <input type="file" id="imageInput" accept="image/*" hidden onchange="handleImageUpload(event)">
+            </section>
+
+            <section class="panel">
+                <div class="panel-header">
+                    <h2>Temel Filtreler</h2>
+                </div>
+                <div class="button-grid">
+                    <button type="button" class="button button-tool" onclick="runBlur()">Bulanıklaştır</button>
+                    <button type="button" class="button button-tool" onclick="runSharpness()">Keskinleştir</button>
+                </div>
+                <div class="parameter-control">
+                    <label for="gammaValue">Gamma</label>
+                    <div class="slider-row">
+                        <input type="range" id="gammaValue" min="0.2" max="3" step="0.1" value="1.5">
+                        <output id="gammaOutput" for="gammaValue">1.5</output>
+                    </div>
+                    <button type="button" class="button button-tool full-width" onclick="runGamma()">Gamma uygula</button>
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="panel-header">
+                    <h2>Thresholding</h2>
+                </div>
+                <div class="button-grid">
+                    <button type="button" class="button button-tool" onclick="runAdaptiveThresholding()">Adaptive</button>
+                    <button type="button" class="button button-tool" onclick="runOtsuThresholding()">Otsu</button>
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="panel-header">
+                    <h2>Kenar Tespiti</h2>
+                </div>
+                <div class="button-grid">
+                    <button type="button" class="button button-tool" onclick="runCanny()">Canny</button>
+                    <button type="button" class="button button-tool" onclick="runSobel()">Sobel</button>
+                    <button type="button" class="button button-tool" onclick="runLaplacian()">Laplacian</button>
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="panel-header">
+                    <h2>Özellik Tespiti</h2>
+                </div>
+                <div class="button-grid">
+                    <button type="button" class="button button-tool" onclick="runHarris()">Harris</button>
+                    <button type="button" class="button button-tool" onclick="runShiTomasi()">Shi-Tomasi</button>
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="panel-header">
+                    <h2>Kamera</h2>
+                </div>
+                <button type="button" id="faceDetectionButton" class="button button-tool full-width" onclick="toggleFaceDetection()">Yüz tanımlamayı aç</button>
+            </section>
+        </aside>
+
+        <main class="preview-workspace">
+            <section class="preview-card" aria-label="Görüntü önizleme">
+                <div class="preview-header">
+                    <div>
+                        <span class="brand-kicker">Önizleme</span>
+                        <h2 id="previewTitle">Henüz resim yok</h2>
+                    </div>
+                    <div class="segmented-control" aria-label="Önce ve sonra karşılaştırma">
+                        <button type="button" id="showOriginalButton" class="segment-button" onclick="showOriginal()">Orijinal</button>
+                        <button type="button" id="showEditedButton" class="segment-button active" onclick="showEdited()">İşlenmiş</button>
+                    </div>
+                </div>
+
+                <div id="previewSurface" class="preview-surface empty">
+                    <img id="imagePreview" class="preview-image" alt="Yüklenen veya işlenen resim" hidden>
+                    <img id="cameraFeed" class="preview-image" alt="Yüz tanıma kamerası" hidden>
+                    <div id="emptyState" class="empty-state">
+                        <h3>İşlemek için bir resim yükleyin</h3>
+                        <p>Desteklenen formatlar: PNG, JPG ve WEBP. Maksimum dosya boyutu 8 MB.</p>
+                    </div>
+                    <div id="loadingOverlay" class="loading-overlay" hidden>
+                        <span>İşleniyor</span>
+                    </div>
+                </div>
+            </section>
+        </main>
     </div>
+
+    <script src="script.js"></script>
 </body>
-<script src="script.js"></script>
 </html>
