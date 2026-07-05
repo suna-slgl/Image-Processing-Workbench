@@ -3,14 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Image Processing Studio</title>
+    <title>Image Processing Workbench</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Lora:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="app-shell">
         <header class="app-header">
             <div class="brand">
-                <h1>Image Processing Studio</h1>
+                <span class="brand-mark" aria-hidden="true">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </span>
+                <h1>Image Processing Workbench</h1>
             </div>
             <div class="header-actions" aria-label="Temel aksiyonlar">
                 <button type="button" id="undoButton" class="button icon-button" onclick="undoImage()" aria-label="Geri al" title="Geri al" disabled>&#8630;</button>
@@ -23,6 +32,7 @@
         <aside class="tool-panel" aria-label="İşlem paneli">
             <section class="panel upload-panel">
                 <button type="button" id="uploadDropzone" class="dropzone" onclick="uploadImage()">
+                    <span class="dropzone-icon" aria-hidden="true"></span>
                     <span class="dropzone-title">Resim yükle</span>
                     <span class="dropzone-copy">Sürükle-bırak veya dosya seç</span>
                     <span class="dropzone-hint">PNG, JPG, WEBP - en fazla 8 MB</span>
@@ -30,7 +40,7 @@
                 <input type="file" id="imageInput" accept="image/*" hidden onchange="handleImageUpload(event)">
             </section>
 
-            <section class="panel">
+            <section class="panel panel-filter">
                 <div class="panel-header">
                     <h2>Temel Filtreler</h2>
                 </div>
@@ -48,7 +58,7 @@
                 </div>
             </section>
 
-            <section class="panel">
+            <section class="panel panel-threshold">
                 <div class="panel-header">
                     <h2>Thresholding</h2>
                 </div>
@@ -58,7 +68,7 @@
                 </div>
             </section>
 
-            <section class="panel">
+            <section class="panel panel-edge">
                 <div class="panel-header">
                     <h2>Kenar Tespiti</h2>
                 </div>
@@ -69,7 +79,7 @@
                 </div>
             </section>
 
-            <section class="panel">
+            <section class="panel panel-feature">
                 <div class="panel-header">
                     <h2>Özellik Tespiti</h2>
                 </div>
@@ -79,7 +89,7 @@
                 </div>
             </section>
 
-            <section class="panel">
+            <section class="panel panel-camera">
                 <div class="panel-header">
                     <h2>Kamera</h2>
                 </div>
@@ -104,6 +114,11 @@
                     <img id="imagePreview" class="preview-image" alt="Yüklenen veya işlenen resim" hidden>
                     <img id="cameraFeed" class="preview-image" alt="Yüz tanıma kamerası" hidden>
                     <div id="emptyState" class="empty-state">
+                        <div class="empty-state-visual" aria-hidden="true">
+                            <span></span>
+                            <span></span>
+                            <span></span>
+                        </div>
                         <h3>İşlemek için bir resim yükleyin</h3>
                         <p>Desteklenen formatlar: PNG, JPG ve WEBP. Maksimum dosya boyutu 8 MB.</p>
                     </div>
