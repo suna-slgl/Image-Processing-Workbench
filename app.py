@@ -1,424 +1,285 @@
-import Flask, Response, render_template, request, jsonify
+import os
+import base64
+from binascii import Error as Base64Error
+from io import BytesIO
+
 import cv2
 import numpy as np
-import base64
-from io import BytesIO
-from PIL import Image
+from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
+from PIL import Image, UnidentifiedImageError
+
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
 CORS(app)
 
-@app.route('/adaptive-thresholding', methods=['POST'])
+
+@app.route("/")
+def index():
+    return send_from_directory(app.root_path, "index.html")
+
+
+@app.route("/style.css")
+def stylesheet():
+    return send_from_directory(app.root_path, "style.css")
+
+
+@app.route("/script.js")
+def script():
+    script_path = os.path.join(app.root_path, "script.js")
+    if not os.path.exists(script_path):
+        return Response("", mimetype="application/javascript")
+
+    return send_from_directory(app.root_path, "script.js")
+
+
+@app.route("/favicon.ico")
+def favicon():
+    return Response(status=204)
+
+
+class ImageValidationError(ValueError):
+    pass
+
+
+@app.errorhandler(413)
+def request_entity_too_large(_error):
+    return jsonify({"message": "Yüklenen resim çok büyük. En fazla 8 MB yükleyebilirsiniz."}), 413
+
+
+def get_image_from_request():
+    if not request.is_json:
+        raise ImageValidationError("İstek JSON formatında olmalıdır.")
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        raise ImageValidationError("Geçerli bir JSON gövdesi gönderilmelidir.")
+
+    data = payload.get("image")
+    if not isinstance(data, str) or not data.strip():
+        raise ImageValidationError("Resim yüklenmedi.")
+
+    try:
+        encoded_image = data.split(",", 1)[1] if "," in data else data
+        image_data = base64.b64decode(encoded_image, validate=True)
+    except (IndexError, Base64Error, ValueError) as exc:
+        raise ImageValidationError("Geçersiz Base64 resim verisi gönderildi.") from exc
+
+    try:
+        with Image.open(BytesIO(image_data)) as image:
+            image.load()
+            if image.mode not in ("RGB", "L"):
+                image = image.convert("RGB")
+            return np.array(image)
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise ImageValidationError("Gönderilen veri geçerli bir resim dosyası değil.") from exc
+
+
+def to_gray(image):
+    if len(image.shape) == 3:
+        return cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    return image
+
+
+def encode_png(image):
+    if image.dtype != np.uint8:
+        image = cv2.normalize(image, None, 0, 255, cv2.NORM_MINMAX)
+        image = image.astype(np.uint8)
+
+    if len(image.shape) == 3:
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+
+    success, buffer = cv2.imencode(".png", image)
+    if not success:
+        raise RuntimeError("İşlenmiş resim PNG formatına dönüştürülemedi.")
+
+    return base64.b64encode(buffer.tobytes()).decode("utf-8")
+
+
+def process_image(transform, success_message):
+    try:
+        image = get_image_from_request()
+        processed_image = transform(image)
+        return jsonify({"message": success_message, "image": encode_png(processed_image)})
+    except ImageValidationError as exc:
+        return jsonify({"message": str(exc)}), 400
+    except Exception as exc:
+        app.logger.exception("Görüntü işleme sırasında hata oluştu")
+        return jsonify({"message": f"Bir hata oluştu: {str(exc)}"}), 500
+
+
+@app.route("/adaptive-thresholding", methods=["POST"])
 def adaptive_thresholding_route():
-    data = request.json.get('image')
-    if not data:
-        return jsonify({'message': 'Resim yüklenmedi!'}), 400
-    
-    # Base64 verisini numpy array'e dönüştür
-    image_data = base64.b64decode(data.split(",")[1])
-    image = Image.open(BytesIO(image_data))
-    image = np.array(image)
+    def transform(image):
+        gray_image = to_gray(image)
+        return cv2.adaptiveThreshold(
+            gray_image,
+            255,
+            cv2.ADAPTIVE_THRESH_MEAN_C,
+            cv2.THRESH_BINARY,
+            11,
+            2,
+        )
 
-    # Renkli resimse gri tonlamaya çevir
-    if len(image.shape) == 3:
-        gray_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    else:
-        gray_image = image
+    return process_image(transform, "Adaptive Thresholding tamamlandı")
 
-    # Adaptive Thresholding işlemi
-    adaptive_image = cv2.adaptiveThreshold(
-        gray_image, 255, cv2.ADAPTIVE_THRESH_MEAN_C, 
-        cv2.THRESH_BINARY, 11, 2
-    )
 
-    # İşlenmiş resmi Base64 formatına geri çevir
-    _, buffer = cv2.imencode('.png', adaptive_image)
-    buffer = BytesIO(buffer)
-    processed_image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-
-    return jsonify({"message": "Adaptive Thresholding completed", "image": processed_image_base64})
-
-# Bulanıklaştırma işlevi
-@app.route('/blur', methods=['POST'])
+@app.route("/blur", methods=["POST"])
 def blur_image():
-    data = request.json.get('image')
-    if not data:
-        return jsonify({"message": "Resim yüklenmedi!"}), 400
-    
-    # Base64 verisini numpy array'e dönüştür
-    image_data = base64.b64decode(data.split(",")[1])  # Veriyi base64'ten çözüp byte dizisine dönüştür
-    image = Image.open(BytesIO(image_data))  # Resmi aç
-    image = np.array(image)  # Resmi numpy dizisine dönüştür
+    def transform(image):
+        return cv2.GaussianBlur(to_gray(image), (15, 15), 0)
 
-    # Gri tonlamaya çevir (renkli ise)
-    if len(image.shape) == 3:
-        gray_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    else:
-        gray_image = image
+    return process_image(transform, "Bulanıklaştırma tamamlandı")
 
-    # Gaussian Blur işlemi
-    blurred_image = cv2.GaussianBlur(gray_image, (15, 15), 0)  # Bulanıklaştırma işlemi
 
-    # İşlenmiş resmi Base64 formatına geri çevir
-    _, buffer = cv2.imencode('.png', blurred_image)  # PNG formatında kodlama
-    buffer = BytesIO(buffer)
-    processed_image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')  # Base64'e çevir
-
-    return jsonify({"message": "Blurring completed", "image": processed_image_base64})
-
-@app.route('/sharpness', methods=['POST'])
+@app.route("/sharpness", methods=["POST"])
 def sharpness_image():
-    data = request.json.get('image')
-    if not data:
-        return jsonify({"message": "Resim yüklenmedi!"}), 400
-    
-    try:
-        # Base64 verisini numpy array'e dönüştür
-        image_data = base64.b64decode(data.split(",")[1])
-        image = Image.open(BytesIO(image_data))
-        image = np.array(image)
+    def transform(image):
+        kernel = np.array(
+            [
+                [-1, -1, -1],
+                [-1, 9, -1],
+                [-1, -1, -1],
+            ]
+        )
+        return cv2.filter2D(to_gray(image), -1, kernel)
 
-        # Gri tonlamaya çevir
-        if len(image.shape) == 3:
-            gray_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        else:
-            gray_image = image
+    return process_image(transform, "Keskinleştirme tamamlandı")
 
-        # Keskinleştirme işlemi: Unsharp Mask yöntemi
-        kernel = np.array([[-1, -1, -1], 
-                           [-1,  9, -1], 
-                           [-1, -1, -1]])  # Bu kernel keskinleştirme işlemi yapar
-        sharp_image = cv2.filter2D(gray_image, -1, kernel)
 
-        # İşlenmiş resmi Base64 formatına geri çevir
-        _, buffer = cv2.imencode('.png', sharp_image)
-        buffer = BytesIO(buffer)
-        processed_image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-
-        return jsonify({"message": "Sharpness completed", "image": processed_image_base64})
-
-    except Exception as e:
-        return jsonify({"message": f"Bir hata oluştu: {str(e)}"}), 500
-
-@app.route('/gamma-filter', methods=['POST'])
+@app.route("/gamma-filter", methods=["POST"])
 def gamma_filter():
-    data = request.json.get('image')
-    if not data:
-        return jsonify({"message": "Resim yüklenmedi!"}), 400
+    def transform(image):
+        payload = request.get_json(silent=True) or {}
+        gamma = payload.get("gamma", 1.5)
 
-    try:
-        # Base64 verisini numpy array'e dönüştür
-        image_data = base64.b64decode(data.split(",")[1])
-        image = Image.open(BytesIO(image_data))
-        image = np.array(image)
+        try:
+            gamma = float(gamma)
+        except (TypeError, ValueError) as exc:
+            raise ImageValidationError("Gamma değeri sayısal olmalıdır.") from exc
 
-        # Gri tonlamaya çevir
-        if len(image.shape) == 3:
-            gray_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        else:
-            gray_image = image
+        if gamma <= 0:
+            raise ImageValidationError("Gamma değeri 0'dan büyük olmalıdır.")
 
-        # Sabit bir gamma değeri
-        gamma = 1.5  # Burada sabit bir gamma değeri kullanılıyor
-        gamma_corrected_image = np.array(255 * (gray_image / 255) ** gamma, dtype='uint8')
+        gray_image = to_gray(image)
+        return np.array(255 * (gray_image / 255) ** gamma, dtype=np.uint8)
 
-        # İşlenmiş resmi Base64 formatına geri çevir
-        _, buffer = cv2.imencode('.png', gamma_corrected_image)
-        buffer = BytesIO(buffer)
-        processed_image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+    return process_image(transform, "Gamma filtreleme tamamlandı")
 
-        return jsonify({"message": "Gamma Filtering completed", "image": processed_image_base64})
 
-    except Exception as e:
-        print(f"Error during Gamma Filtering: {str(e)}")  # Detaylı hata mesajını yazdır
-        return jsonify({"message": f"Bir hata oluştu: {str(e)}"}), 500
-
-    data = request.json.get('image')
-    gamma_value = request.json.get('gamma', 1.0)  # Default gamma 1.0
-    if not data:
-        return jsonify({"message": "Resim yüklenmedi!"}), 400
-    
-    try:
-        # Base64 verisini numpy array'e dönüştür
-        image_data = base64.b64decode(data.split(",")[1])
-        image = Image.open(BytesIO(image_data))
-        image = np.array(image)
-
-        # Renkli resimse gri tonlamaya çevir
-        if len(image.shape) == 3:
-            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-
-        # Gamma Filterleme işlemi
-        gamma_correction_image = np.power(image / 255.0, gamma_value) * 255.0
-        gamma_correction_image = np.uint8(gamma_correction_image)
-
-        # İşlenmiş resmi Base64 formatına geri çevir
-        _, buffer = cv2.imencode('.png', gamma_correction_image)
-        buffer = BytesIO(buffer)
-        processed_image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-
-        return jsonify({"message": "Gamma Correction completed", "image": processed_image_base64})
-
-    except Exception as e:
-        return jsonify({"message": f"Bir hata oluştu: {str(e)}"}), 500
-
-@app.route('/canny', methods=['POST'])
+@app.route("/canny", methods=["POST"])
 def canny_filter():
-    data = request.json.get('image')
-    if not data:
-        return jsonify({"message": "Resim yüklenmedi!"}), 400
+    def transform(image):
+        return cv2.Canny(to_gray(image), 100, 200)
 
-    try:
-        # Base64 verisini numpy array'e dönüştür
-        image_data = base64.b64decode(data.split(",")[1])
-        image = Image.open(BytesIO(image_data))
-        image = np.array(image)
+    return process_image(transform, "Canny kenar tespiti tamamlandı")
 
-        # Gri tonlamaya çevir
-        if len(image.shape) == 3:
-            image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
 
-        # Canny Kenar Tespit işlemi
-        edges = cv2.Canny(image, 100, 200)  # İki threshold değeri ile Canny algoritması
-
-        # İşlenmiş resmi Base64 formatına geri çevir
-        _, buffer = cv2.imencode('.png', edges)
-        buffer = BytesIO(buffer)
-        processed_image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-
-        return jsonify({"message": "Canny Edge Detection completed", "image": processed_image_base64})
-
-    except Exception as e:
-        return jsonify({"message": f"Bir hata oluştu: {str(e)}"}), 500
-    
-@app.route('/sobel', methods=['POST'])
+@app.route("/sobel", methods=["POST"])
 def sobel_filter():
-    data = request.json.get('image')
-    if not data:
-        return jsonify({"message": "Resim yüklenmedi!"}), 400
+    def transform(image):
+        gray_image = to_gray(image)
+        sobel_x = cv2.Sobel(gray_image, cv2.CV_64F, 1, 0, ksize=3)
+        sobel_y = cv2.Sobel(gray_image, cv2.CV_64F, 0, 1, ksize=3)
+        return cv2.magnitude(sobel_x, sobel_y)
 
-    try:
-        # Base64 verisini numpy array'e dönüştür
-        image_data = base64.b64decode(data.split(",")[1])
-        image = Image.open(BytesIO(image_data))
-        image = np.array(image)
+    return process_image(transform, "Sobel kenar tespiti tamamlandı")
 
-        # Gri tonlamaya çevir
-        if len(image.shape) == 3:
-            image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
 
-        # Sobel Filtreleme işlemi (Hem X hem Y yönünde)
-        sobel_x = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=3)  # Yatay kenarlar
-        sobel_y = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=3)  # Dikey kenarlar
-
-        # Kenarları birleştirme (magnitude)
-        sobel_edges = cv2.magnitude(sobel_x, sobel_y)
-
-        # İşlenmiş resmi Base64 formatına geri çevir
-        _, buffer = cv2.imencode('.png', sobel_edges)
-        buffer = BytesIO(buffer)
-        processed_image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-
-        return jsonify({"message": "Sobel Edge Detection completed", "image": processed_image_base64})
-
-    except Exception as e:
-        return jsonify({"message": f"Bir hata oluştu: {str(e)}"}), 500
-
-@app.route('/laplacian', methods=['POST'])
+@app.route("/laplacian", methods=["POST"])
 def laplacian_filter():
-    data = request.json.get('image')
-    if not data:
-        return jsonify({"message": "Resim yüklenmedi!"}), 400
+    def transform(image):
+        laplacian = cv2.Laplacian(to_gray(image), cv2.CV_64F)
+        return cv2.convertScaleAbs(laplacian)
 
-    try:
-        # Base64 verisini numpy array'e dönüştür
-        image_data = base64.b64decode(data.split(",")[1])
-        image = Image.open(BytesIO(image_data))
-        image = np.array(image)
+    return process_image(transform, "Laplacian kenar tespiti tamamlandı")
 
-        # Gri tonlamaya çevir
-        if len(image.shape) == 3:
-            image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
 
-        # Laplacian Kenar Tespiti
-        laplacian = cv2.Laplacian(image, cv2.CV_64F)
-        laplacian = cv2.convertScaleAbs(laplacian)  # Sonuçları pozitif değerlere dönüştür
-
-        # İşlenmiş resmi Base64 formatına geri çevir
-        _, buffer = cv2.imencode('.png', laplacian)
-        buffer = BytesIO(buffer)
-        processed_image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-
-        return jsonify({"message": "Laplacian Edge Detection completed", "image": processed_image_base64})
-
-    except Exception as e:
-        return jsonify({"message": f"Bir hata oluştu: {str(e)}"}), 500
-
-@app.route('/shi-tomasi-corner', methods=['POST'])
+@app.route("/shi-tomasi-corner", methods=["POST"])
 def shi_tomasi_corner_detection():
-    data = request.json.get('image')
-    if not data:
-        return jsonify({"message": "Resim yüklenmedi!"}), 400
-
-    try:
-        # Base64 verisini numpy array'e dönüştür
-        image_data = base64.b64decode(data.split(",")[1])
-        image = Image.open(BytesIO(image_data))
-        image = np.array(image)
-
-        # Gri tonlamaya çevir
-        if len(image.shape) == 3:
-            gray_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        else:
-            gray_image = image
-
-        # Shi-Tomasi köşe tespiti
+    def transform(image):
+        gray_image = to_gray(image)
         corners = cv2.goodFeaturesToTrack(gray_image, 100, 0.01, 10)
-        
+
         if corners is None:
-            raise ValueError("Köşe tespiti için yeterli özellik bulunamadı.")  # Köşe tespiti yapılmadıysa hata fırlat
+            raise ImageValidationError("Köşe tespiti için yeterli özellik bulunamadı.")
 
-        corners = np.int32(corners)  # np.int0 yerine np.int32 kullanıyoruz
-
-        # Renkli resime dönüştür
-        if len(image.shape) == 2:  # Eğer gri tonlama resmi ise, RGB'ye çevir
-            image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
-
-        # Köşe noktalarını kırmızıya boyama
-        for corner in corners:
+        output = cv2.cvtColor(gray_image, cv2.COLOR_GRAY2RGB) if len(image.shape) == 2 else image.copy()
+        for corner in np.int32(corners):
             x, y = corner.ravel()
-            cv2.circle(image, (x, y), 3, (0, 0, 255), -1)  # Kırmızı noktalar
+            cv2.circle(output, (x, y), 3, (255, 0, 0), -1)
+        return output
 
-        # İşlenmiş resmi Base64 formatına geri çevir
-        _, buffer = cv2.imencode('.png', image)
-        buffer = BytesIO(buffer)
-        processed_image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-
-        return jsonify({"message": "Shi-Tomasi Corner Detection completed", "image": processed_image_base64})
-
-    except Exception as e:
-        print(f"Error during Shi-Tomasi Corner Detection: {str(e)}")  # Detaylı hata mesajını yazdır
-        return jsonify({"message": f"Bir hata oluştu: {str(e)}"}), 500
+    return process_image(transform, "Shi-Tomasi köşe tespiti tamamlandı")
 
 
-    
-@app.route('/harris-corner', methods=['POST'])
+@app.route("/harris-corner", methods=["POST"])
 def harris_corner_detection():
-    data = request.json.get('image')
-    if not data:
-        return jsonify({"message": "Resim yüklenmedi!"}), 400
-
-    try:
-        # Base64 verisini kontrol et
-        print("Gelen Base64 Resim Verisi:", data)  # Base64 verisini kontrol et
-
-        # Base64 verisini numpy array'e dönüştür
-        image_data = base64.b64decode(data.split(",")[1])
-        image = Image.open(BytesIO(image_data))
-        image = np.array(image)
-
-        # Gri tonlamaya çevir
-        if len(image.shape) == 3:
-            gray_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        else:
-            gray_image = image
-
-        # Harris Corner Detection
+    def transform(image):
+        gray_image = to_gray(image)
         dst = cv2.cornerHarris(gray_image, 2, 3, 0.04)
-
-        # Sonuçları görselleştir
         dst = cv2.dilate(dst, None)
 
-        # Renkli resime dönüştür
-        if len(image.shape) == 2:  # Eğer gri tonlama resmi ise, RGB'ye çevir
-            image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        output = cv2.cvtColor(gray_image, cv2.COLOR_GRAY2RGB) if len(image.shape) == 2 else image.copy()
+        output[dst > 0.01 * dst.max()] = [255, 0, 0]
+        return output
 
-        # Harris köşelerini kırmızıya boyama
-        image[dst > 0.01 * dst.max()] = [0, 0, 255]  # Köşe noktalarını kırmızı yap
+    return process_image(transform, "Harris köşe tespiti tamamlandı")
 
-        print("Harris köşe tespiti tamamlandı.")  # Hata ayıklamak için
 
-        # İşlenmiş resmi Base64 formatına geri çevir
-        _, buffer = cv2.imencode('.png', image)
-        buffer = BytesIO(buffer)
-        processed_image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-
-        print("Resim Base64 formatına dönüştürüldü.")  # Hata ayıklamak için
-
-        return jsonify({"message": "Harris Corner Detection completed", "image": processed_image_base64})
-
-    except Exception as e:
-        print(f"Bir hata oluştu: {str(e)}")  # Detaylı hata mesajı
-        return jsonify({"message": f"Bir hata oluştu: {str(e)}"}), 500
-
-@app.route('/otsu-thresholding', methods=['POST'])
+@app.route("/otsu-thresholding", methods=["POST"])
 def otsu_thresholding():
-    data = request.json.get('image')
-    if not data:
-        return jsonify({"message": "Resim yüklenmedi!"}), 400
+    def transform(image):
+        _, otsu_thresholded_image = cv2.threshold(
+            to_gray(image),
+            0,
+            255,
+            cv2.THRESH_BINARY + cv2.THRESH_OTSU,
+        )
+        return otsu_thresholded_image
 
-    try:
-        # Base64 verisini numpy array'e dönüştür
-        image_data = base64.b64decode(data.split(",")[1])
-        image = Image.open(BytesIO(image_data))
-        image = np.array(image)
-
-        # Gri tonlamaya çevir
-        if len(image.shape) == 3:
-            gray_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        else:
-            gray_image = image
-
-        # Otsu Thresholding işlemi
-        _, otsu_thresholded_image = cv2.threshold(gray_image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        # İşlenmiş resmi Base64 formatına geri çevir
-        _, buffer = cv2.imencode('.png', otsu_thresholded_image)
-        buffer = BytesIO(buffer)
-        processed_image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-
-        return jsonify({"message": "Otsu Thresholding completed", "image": processed_image_base64})
-
-    except Exception as e:
-        print(f"Error during Otsu Thresholding: {str(e)}")  # Detaylı hata mesajını yazdır
-        return jsonify({"message": f"Bir hata oluştu: {str(e)}"}), 500
+    return process_image(transform, "Otsu Thresholding tamamlandı")
 
 
-@app.route('/video-feed')
+@app.route("/video-feed")
 def video_feed():
     def generate_frames():
-        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-        camera = cv2.VideoCapture(0)  # Web kamerasını başlat
+        face_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        )
+        camera = cv2.VideoCapture(0)
 
-        while True:
-            success, frame = camera.read()
-            if not success:
-                break
+        try:
+            while True:
+                success, frame = camera.read()
+                if not success:
+                    break
 
-            # Gri tonlamaya çevir
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                faces = face_cascade.detectMultiScale(
+                    gray,
+                    scaleFactor=1.1,
+                    minNeighbors=5,
+                    minSize=(30, 30),
+                )
 
-            # Yüz algılama
-            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+                for (x, y, w, h) in faces:
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
 
-            # Yüz etrafına dikdörtgen çizin
-            for (x, y, w, h) in faces:
-                cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
+                success, buffer = cv2.imencode(".jpg", frame)
+                if not success:
+                    continue
 
-            # Çerçeveyi JPEG formatına kodla
-            _, buffer = cv2.imencode('.jpg', frame)
-            frame = buffer.tobytes()
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
+                )
+        finally:
+            camera.release()
 
-            # Çerçeveyi döndür
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-
-    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
-
+    return Response(generate_frames(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 
-
-
-if __name__ == '__main__':
-    app.run(debug=True)
+if __name__ == "__main__":
+    app.run(debug=os.environ.get("FLASK_DEBUG") == "1")
